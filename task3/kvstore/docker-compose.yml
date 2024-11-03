@@ -1,0 +1,112 @@
+services:
+  # Основная база данных
+  datahub:
+    image: postgres
+    environment:
+      POSTGRES_DB: kv_database
+      POSTGRES_USER: macbook1
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - datahub_data:/var/lib/postgresql/data  # Хранилище данных для постоянства
+    restart: always
+
+  # Реплика базы данных
+  datahub_replica:
+    image: postgres
+    environment:
+      POSTGRES_DB: kv_database_replica
+      POSTGRES_USER: macbook1_replica
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5433:5432"
+    depends_on:
+      - datahub
+    restart: always
+
+  # Первый экземпляр приложения Django
+  app_instance_1:
+    build: .
+    command: sh -c "sleep 10 && python manage.py runserver 0.0.0.0:8000"
+    environment:
+      DATABASE_URL: postgres://macbook1:password@datahub:5432/kv_database
+    volumes:
+      - .:/workspace
+    ports:
+      - "8000:8000"
+    depends_on:
+      - datahub
+      - datahub_replica
+
+  # Второй экземпляр приложения Django
+  app_instance_2:
+    build: .
+    command: sh -c "sleep 10 && python manage.py runserver 0.0.0.0:8001"
+    environment:
+      DATABASE_URL: postgres://macbook1:password@datahub:5432/kv_database
+    volumes:
+      - .:/workspace
+    ports:
+      - "8001:8001"
+    depends_on:
+      - datahub
+      - datahub_replica
+
+  # Prometheus
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    depends_on:
+      - app_instance_1
+      - app_instance_2
+
+  # Grafana
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
+
+  # Elasticsearch
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.10.1
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+
+  # Logstash
+  logstash:
+    image: docker.elastic.co/logstash/logstash:7.10.1
+    ports:
+      - "5044:5044"
+    volumes:
+      - ./logstash.conf:/usr/share/logstash/pipeline/logstash.conf
+    depends_on:
+      - elasticsearch
+
+  # Kibana
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.10.1
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+
+volumes:
+  datahub_data:
+    driver: local
+  elasticsearch_data:
+    driver: local
